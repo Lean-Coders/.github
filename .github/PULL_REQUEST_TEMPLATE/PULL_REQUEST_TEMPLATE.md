@@ -1,3 +1,4 @@
+<!--- NOTE: If you want to improve this template, please file a PR here: https://github.com/Lean-Coders/.github -->
 ## Goals
 
 -
