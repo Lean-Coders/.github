@@ -1,4 +1,3 @@
-<!--- NOTE: If you want to improve this template, please file a PR here: https://github.com/Lean-Coders/.github -->
 ## Goals
 
 -
@@ -19,3 +18,5 @@ they make it easier to understand the changes.
 <!--- Add the Issue being closed by this PR here -->
 
 closes 
+
+<!--- NOTE: If you want to improve this template, please file a PR here: https://github.com/Lean-Coders/.github -->
