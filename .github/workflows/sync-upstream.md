@@ -9,21 +9,26 @@ Note that this is only required for forks that are private and thus not inside t
 1. Copy the workflow file (`.github/workflows/sync-upstream.yml`) to your repository.
 2. Set up the required variables and secrets in your repository under ` Settings > Secrets and variables > Actions`.
 
-### Required Variables
+### Variables
 
-- `UPSTREAM_REPO`: The upstream repository to sync from (e.g., `original-owner/original-repo`)
+| Name | Default | Required |
+|------|---------|----------|
+| UPSTREAM_REPO | - | ✅ |
+| FORK_BASE_BRANCH | main | ❌ |
+| OWN_BRANCH | main | ❌ |
+| USER_EMAIL | actions@github.com | ❌ |
+| USER_NAME | GitHub Actions | ❌ |
+| SYNC_SCHEDULE | 0 0 * * 0 *(=weekly on Sunday)* | ❌ |
 
-### Optional Variables
+### Secrets
 
-- `FORK_BASE_BRANCH`: The branch in the upstream repo to sync from (default: 'main')
-- `OWN_BRANCH`: Your branch to sync into (default: 'main')
-- `USER_EMAIL`: The email for git config (default: 'actions@github.com')
-- `USER_NAME`: The name for git config (default: 'GitHub Actions')
-- `SYNC_SCHEDULE`: Cron schedule for automated sync (default: '0 0 * * 0', which is weekly on Sunday)
+ A GitHub personal access token with necessary permissions (only required in specific cases, such as when workflow files are written inside a workflow)
 
-### Optional Secrets
+| Name | Default | Required |
+|------|---------|----------|
+| WORKFLOW_TOKEN | github.token | ❌ |
 
-- `WORKFLOW_TOKEN`: A GitHub personal access token with necessary permissions (only required in specific cases, such as when workflow files are written inside a workflow)
+
 
 ## Functionality
 
