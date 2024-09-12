@@ -1,0 +1,97 @@
+name: Sync Upstream and Create PR
+
+on:
+  schedule:
+    - cron: ${{ vars.SYNC_SCHEDULE || '0 0 * * 0' }} # Default: Weekly on Sunday
+  workflow_dispatch:
+
+env:
+  # A custom PAT is only required in specific cases, such as when workflow files are written inside a workflow.
+  GITHUB_TOKEN: ${{ secrets.WORKFLOW_TOKEN || github.token }}
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO }}
+  FORK_BASE_BRANCH: ${{ vars.FORK_BASE_BRANCH || 'main' }}
+  OWN_BRANCH: ${{ vars.OWN_BRANCH || 'main' }}
+  USER_EMAIL: ${{ vars.USER_EMAIL || 'actions@github.com' }}
+  USER_NAME: ${{ vars.USER_NAME || 'GitHub Actions' }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout your fork
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git remote -v
+
+      - name: Fetch upstream and origin branches
+        run: |
+          git fetch upstream ${{ env.FORK_BASE_BRANCH }}
+          git fetch origin ${{ env.OWN_BRANCH }}
+
+      - name: Debug information
+        run: |
+          echo "Current branch: $(git branch --show-current)"
+          echo "Status of ${{ env.OWN_BRANCH }}:"
+          git status --short
+          echo "Last 5 commits of ${{ env.OWN_BRANCH }}:"
+          git log -n 5 --oneline ${{ env.OWN_BRANCH }}
+          echo "Last commit of upstream/${{ env.FORK_BASE_BRANCH }}:"
+          git log -n 1 --oneline upstream/${{ env.FORK_BASE_BRANCH }}
+          echo "Branches comparison:"
+          git rev-list --left-right --count origin/${{ env.OWN_BRANCH }}...upstream/${{ env.FORK_BASE_BRANCH }}
+
+      - name: Check for changes
+        id: check_changes
+        run: |
+          git checkout ${{ env.OWN_BRANCH }}
+          MERGE_BASE=$(git merge-base upstream/${{ env.FORK_BASE_BRANCH }} origin/${{ env.OWN_BRANCH }})
+          if git rev-list $MERGE_BASE..upstream/${{ env.FORK_BASE_BRANCH }} | grep -q .; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+            echo "New changes detected in upstream."
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+            echo "No new changes in upstream. Your branch is up to date or ahead."
+          fi
+
+      - name: Generate branch name with date
+        id: generate_branch_name
+        if: steps.check_changes.outputs.changes == 'true'
+        run: |
+          DATE=$(date +'%Y-%m-%d')
+          SYNC_BRANCH_NAME=sync-fork-${DATE}
+          echo "DATE=${DATE}" >> $GITHUB_OUTPUT
+          echo "SYNC_BRANCH_NAME=${SYNC_BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "Branch name: ${SYNC_BRANCH_NAME}"
+
+      - name: Create a new branch for PR
+        if: steps.check_changes.outputs.changes == 'true'
+        run: |
+          git config --global user.email "${{ env.USER_EMAIL }}"
+          git config --global user.name "${{ env.USER_NAME }}"
+          git checkout -b ${{ steps.generate_branch_name.outputs.SYNC_BRANCH_NAME }} upstream/${{ env.FORK_BASE_BRANCH }}
+          git push origin ${{ steps.generate_branch_name.outputs.SYNC_BRANCH_NAME }} --force
+
+      - name: Create a pull request to merge upstream into master
+        if: steps.check_changes.outputs.changes == 'true'
+        env:
+          GITHUB_TOKEN: ${{ env.GITHUB_TOKEN }}
+        run: |
+          TITLE="Merge upstream changes into ${{ env.OWN_BRANCH }}: $(date +'%Y-%m-%d')"
+          BODY="This PR merges upstream changes from the original ${{ env.UPSTREAM_REPO }} repo's ${{ env.FORK_BASE_BRANCH }} branch into our own ${{ env.OWN_BRANCH }} branch. \nPlease review and resolve any conflicts."
+
+          curl -X POST -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/pulls \
+            -d "$(jq -n \
+              --arg title "$TITLE" \
+              --arg head "${{ steps.generate_branch_name.outputs.SYNC_BRANCH_NAME }}" \
+              --arg base "${{ env.OWN_BRANCH }}" \
+              --arg body "$BODY" \
+              '{title: $title, head: $head, base: $base, body: $body}')"
