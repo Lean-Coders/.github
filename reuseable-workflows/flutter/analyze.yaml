@@ -1,0 +1,135 @@
+name: Analyze
+
+on: [pull_request, push]
+
+# Explicit read-all permissions needed here to overcome the "Resource not accessible by integration" error
+# raised when this workflow is triggered by an auto-generated PR
+permissions: read-all
+
+jobs:
+  set_vars:
+    name: Set Auxiliary Variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      flutter_version: ${{ steps.vars.outputs.flutter_version }}
+      flutter_channel: ${{ steps.vars.outputs.flutter_channel }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set Variables
+        id: vars
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // Setting flutter version and channel dynamically based on the .fvmrc
+            const fs = require('fs').promises;
+            const data = await fs.readFile('./.fvmrc', 'utf8');
+            const fvmConfig = JSON.parse(data);
+            const flutterVersion = fvmConfig.flutter;
+            const flutterChannel = fvmConfig.flutterSdkChannel || 'stable'
+            core.setOutput('flutter_version', flutterVersion)
+            core.setOutput('flutter_channel', flutterChannel)
+
+            // Printing variables
+            console.log(`flutter_version: ${flutterVersion}`)
+            console.log(`flutter_channel: ${flutterChannel}`)
+
+  semantic-pull-request:
+    name: Semantic Pull Request Check
+    uses: VeryGoodOpenSource/very_good_workflows/.github/workflows/semantic_pull_request.yml@v1
+
+  analyze:
+    needs: set_vars
+    name: Run Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FLUTTER_VERSION: ${{ needs.set_vars.outputs.flutter_version }}
+      FLUTTER_CHANNEL: ${{ needs.set_vars.outputs.flutter_channel }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Cache Downloads
+        uses: actions/cache@v3
+        with:
+          path: ${{ runner.tool_cache }}/flutter
+          key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}-${{ env.FLUTTER_CHANNEL }}
+
+      # Uncomment the following lines if you need to create an env file
+      # - name: Create env file
+      #   run: |
+      #     touch .env
+      #     echo SENTRY_DSN=${{ secrets.SENTRY_DSN }} >> .env
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Display Used Flutter Version
+        run: flutter --version
+
+      - name: Install Dependencies
+        run: flutter packages get
+
+      - name: Paths Changes Filter
+        uses: dorny/paths-filter@v2.11.1
+        id: changes
+        with:
+          filters: |
+            lib:
+              - 'lib/**'
+              - 'packages/**'
+            test:
+              - 'test/**'
+              - 'packages/**'
+      - name: Format
+        run: dart format --set-exit-if-changed lib test
+
+      - name: Run `build_runner` to check for potential code generation errors
+        run: flutter pub run build_runner build --delete-conflicting-outputs --verbose
+
+      - name: Analyze - lib
+        if: steps.changes.outputs.lib == 'true'
+        run: flutter analyze lib
+
+      - name: Analyze - test
+        if: steps.changes.outputs.test == 'true'
+        run: flutter analyze test
+
+  run-tests:
+    needs: set_vars
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FLUTTER_VERSION: ${{ needs.set_vars.outputs.flutter_version }}
+      FLUTTER_CHANNEL: ${{ needs.set_vars.outputs.flutter_channel }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Cache Downloads
+        uses: actions/cache@v3
+        with:
+          path: ${{ runner.tool_cache }}/flutter
+          key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}-${{ env.FLUTTER_CHANNEL }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Display Used Flutter Version
+        run: flutter --version
+
+      - name: Install Dependencies
+        run: flutter packages get
+
+      - name: Run Tests
+        run: flutter test
