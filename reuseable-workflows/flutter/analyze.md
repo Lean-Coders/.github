@@ -31,7 +31,7 @@ This GitHub Action runs analysis and tests for your Flutter project. It's design
 | FLUTTER_VERSION | .fvmrc | Flutter version to use |
 | FLUTTER_CHANNEL | .fvmrc | Flutter channel to use (defaults to 'stable') |
 
-## Secrets
+## .env
 
 If a .env file is used to store secrets:
 1. add the secrets to your repository

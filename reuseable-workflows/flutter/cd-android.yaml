@@ -1,0 +1,221 @@
+name: CD-Android
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+    inputs:
+      buildFlavor:
+        description: "Build Flavor"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+        default: "prod"
+
+jobs:
+  set_vars:
+    name: Set Auxiliary Variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      # Using commit hash as suffix so that we can easily associate the artifact with the commit
+      version: ${{ steps.vars.outputs.version }}
+      artifact_name_apk: ${{ steps.vars.outputs.artifact_name_apk }}
+      release_date: ${{steps.vars.outputs.release_date}}
+      flutter_version: ${{ steps.vars.outputs.flutter_version }}
+      flutter_channel: ${{ steps.vars.outputs.flutter_channel }}
+      build_flavor: ${{ steps.vars.outputs.build_flavor }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Extract branch name
+        shell: bash
+        run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >>$GITHUB_OUTPUT
+        id: extract_branch
+
+      - name: Set Variables
+        id: vars
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // Settings `build_flavour` output
+            let buildFlavor;
+
+             // Directly use `context.eventName` to check the event that triggered the workflow
+            if (context.eventName === 'workflow_dispatch') {
+              // For manual triggers, use the input directly
+              buildFlavor = context.payload.inputs.buildFlavor;
+            } else {
+              // For push events, determine the flavor based on the branch
+              const branchName = context.ref.replace('refs/heads/', '');
+              buildFlavor = branchName === 'main' ? 'prod' : 'dev';
+            }
+            core.setOutput('build_flavor', buildFlavor);
+
+            const fs = require('fs').promises;
+            let pubspec = await fs.readFile('pubspec.yaml', 'utf8');
+            let versionMatch = pubspec.match(/version: (.+)/);
+            if (!versionMatch) {
+              core.setFailed('Version not found in pubspec.yaml');
+              return;
+            }
+            let version = versionMatch[1];
+            if (context.eventName === 'workflow_dispatch') {
+              version += '-RC';
+            }
+            core.setOutput('version', version);
+
+            // Setting `artifact_name_apk` and `release_date` output
+            const date = new Date()
+            const formattedDate = date.toISOString().split('T')[0];
+
+            const artifactNameApk = `Journee-${version}-${buildFlavor}-${formattedDate}`
+            core.setOutput('artifact_name_apk', artifactNameApk)
+            core.setOutput('release_date', date)
+
+            // Setting flutter version and channel dynamically based on the .fvmrc
+            const data = await fs.readFile('./.fvmrc', 'utf8');
+            const fvmConfig = JSON.parse(data);
+            const flutterVersion = fvmConfig.flutter
+            const flutterChannel = fvmConfig.flutterSdkChannel || 'stable'
+            core.setOutput('flutter_version', flutterVersion)
+            core.setOutput('flutter_channel', flutterChannel)
+
+            // Printing variables
+            console.log(`app_version: ${version}. A -RC suffix means that it was created from a manual workflow dispatch.`)
+            console.log(`artifact_name_apk: ${artifactNameApk}`)
+            console.log(`release_date: ${date}`)
+            console.log(`flutter_version: ${flutterVersion}`)
+            console.log(`flutter_channel: ${flutterChannel}`)
+            console.log(`build_flavor: ${buildFlavor}`)
+
+  build_android:
+    needs: set_vars
+    name: Build Android APK, Appbundle and upload to GitHub
+    runs-on: ubuntu-latest
+    # Setting a longer timeout to make sure that the build process is not interrupted
+    timeout-minutes: 45
+    env:
+      FLUTTER_VERSION: ${{ needs.set_vars.outputs.flutter_version }}
+      FLUTTER_CHANNEL: ${{ needs.set_vars.outputs.flutter_channel }}
+      BUILD_FLAVOR: ${{ needs.set_vars.outputs.build_flavor }}
+      RELEASE_DATE: ${{ needs.set_vars.outputs.release_date }}
+      ARTIFACT_NAME_APK: ${{ needs.set_vars.outputs.artifact_name_apk }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEYSTORE_KEY_ALIAS: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+      KEYSTORE_KEY_PASSWORD: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Cache Downloads
+        uses: actions/cache@v3
+        with:
+          path: ${{ runner.tool_cache }}/flutter
+          key: ${{ runner.os }}-flutter-${{ env.FLUTTER_VERSION }}-${{ env.FLUTTER_CHANNEL }}
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+
+      - name: Display Used Flutter Version
+        run: flutter --version
+
+      # - name: Create env file
+      #   run: |
+      #     touch .env
+      #     echo SENTRY_DSN=${{ secrets.SENTRY_DSN }} >> .env
+
+      - name: Run `build_runner` to check for potential code generation errors
+        run: flutter pub run build_runner build --delete-conflicting-outputs --verbose
+
+      - name: Format
+        run: dart format --set-exit-if-changed lib test
+
+      - name: Analyze - lib
+        run: flutter analyze lib
+
+      - name: Decode Keystore
+        env:
+          ENCODED_STRING: ${{ secrets.KEYSTORE }}
+        run: |
+          TMP_KEYSTORE_FILE_PATH="${RUNNER_TEMP}"/keystore
+          mkdir "${TMP_KEYSTORE_FILE_PATH}"
+          echo $ENCODED_STRING | base64 -di > "${TMP_KEYSTORE_FILE_PATH}"/journee_keystore.jks
+
+      - name: Build AppBundle
+        run: flutter build appbundle --flavor ${{ env.BUILD_FLAVOR }} --release --dart-define=RELEASE_DATE=${{ env.RELEASE_DATE }}
+
+      - name: Rename AppBundle - File
+        run: mv build/app/outputs/bundle/${{ env.BUILD_FLAVOR }}Release/app-${{ env.BUILD_FLAVOR }}-release.aab build/app/outputs/bundle/${{ env.BUILD_FLAVOR }}Release/${{ env.ARTIFACT_NAME_APK }}.aab
+
+      - name: Upload AppBundle as a GitHub Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.ARTIFACT_NAME_APK }}-AppBundle
+          path: build/app/outputs/bundle/${{ env.BUILD_FLAVOR }}Release/${{ env.ARTIFACT_NAME_APK }}.aab
+
+          # The artifact will be deleted after 30 days for non-main branches and after 90 days for the main branch
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 30 }}
+
+      - name: Build APK
+        run: flutter build apk --flavor ${{ env.BUILD_FLAVOR }} --release --dart-define=RELEASE_DATE=${{ env.RELEASE_DATE }}
+
+      - name: Rename APK - File
+        run: mv build/app/outputs/flutter-apk/app-${{ env.BUILD_FLAVOR }}-release.apk build/app/outputs/flutter-apk/${{ env.ARTIFACT_NAME_APK }}.apk
+
+      - name: Upload APK as a GitHub Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ env.ARTIFACT_NAME_APK }}
+          path: build/app/outputs/flutter-apk/${{ env.ARTIFACT_NAME_APK }}.apk
+
+          # The artifact will be deleted after 30 days for non-main branches and after 90 days for the main branch
+          retention-days: ${{ github.ref == 'refs/heads/main' && 90 || 30 }}
+
+  # Do NOT create tag on dev push. create a tag and prerelease with -RC suffix on workflow_dispatch. create a tag and release on main push
+  tag-version:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' ||  github.event_name == 'workflow_dispatch' }}
+    name: Add Git Tag and GitHub Release with version number
+    needs: [set_vars, build_android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Fetches all history for all tags and branches
+
+      - name: Create Git Tag
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag v${{ needs.set_vars.outputs.version }}
+          git push origin v${{ needs.set_vars.outputs.version }}
+
+      - name: Download APK Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ needs.set_vars.outputs.artifact_name_apk }}
+
+      - name: Download AppBundle Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ needs.set_vars.outputs.artifact_name_apk }}-AppBundle
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.set_vars.outputs.version }}
+          files: |
+            ${{ needs.set_vars.outputs.artifact_name_apk }}.apk
+            ${{ needs.set_vars.outputs.artifact_name_apk }}-AppBundle.aab
+          prerelease: ${{ github.event_name == 'workflow_dispatch' }}
