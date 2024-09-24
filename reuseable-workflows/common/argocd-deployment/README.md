@@ -6,7 +6,7 @@ This GitHub Action helps automate the process of updating a deployment manifest 
 
 1. Copy the workflow file (`.github/workflows/argocd-deployment.yml`) to your repository.
 2. Change the build step and variables passed to the action to fit your requirements
-3. Set up the required `github-token` secret in your repository under ` Settings > Secrets and variables > Actions`.
+3. Set up the required secrets in your repository under ` Settings > Secrets and variables > Actions`.
 
 ### Variables to be passed to 'pujux/argocd-manifest-update' action
 
