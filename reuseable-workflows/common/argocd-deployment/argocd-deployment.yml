@@ -1,0 +1,43 @@
+name: Deploy
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/docker-login@v2
+        with:
+          login-server: ${{ secrets.REGISTRY_URL }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: "Build and Push Docker Image"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_URL }}/[IMAGE-NAME]:${{ github.sha }}
+            ${{ secrets.REGISTRY_URL }}/[IMAGE-NAME]:latest
+
+  update-manifest-stage:
+    runs-on: ubuntu-latest
+    needs: ["build"]
+    steps:
+      - name: ArgoCD Manifest Update
+        uses: pujux/argocd-manifest-update@v1
+        with:
+          deployment-repo: Lean-Coders/deployment-argocd-leanAks
+          deployment-repo-ref: "main"
+          github-token: ${{ secrets.G_TOKEN }}
+          manifest-file: apps/{MANIFEST-NAME}.yaml
+          image-name: "{IMAGE-NAME}"
+          image-tag: ${{ github.sha }}
+          git-email: deploy@lean-coders.at
+          git-name: LC-Deploy
